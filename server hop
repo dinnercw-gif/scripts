@@ -273,19 +273,21 @@ local function buildUI()
 end
 
 -- === AUTO RELOAD ON HOP (CRITICAL) ===
-local SCRIPT_URL = "https://raw.githubusercontent.com/YourUsername/YourRepo/main/SABServerHop.lua"  -- CHANGE THIS TO YOUR RAW GITHUB LINK
+local SCRIPT_URL = "https://raw.githubusercontent.com/dinnercw-gif/scripts/refs/heads/main/server%20hop"
 
+-- Synapse X / Script-Ware queue_on_teleport version
 if syn and syn.queue_on_teleport then
-    syn.queue_on_teleport("loadstring(game:HttpGet('"..SCRIPT_URL.."'))()")
+    syn.queue_on_teleport("loadstring(game:HttpGet('https://raw.githubusercontent.com/dinnercw-gif/scripts/refs/heads/main/server%20hop'))()")
 end
 
+-- Universal fallback for ALL exploits
 LocalPlayer.OnTeleport:Connect(function()
     task.wait(1)
-    loadstring(game:HttpGet(SCRIPT_URL))()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/dinnercw-gif/scripts/refs/heads/main/server%20hop"))()
 end)
 
 -- === START ===
 buildUI()
 if Settings.AutoCheck then startAutoCheck() end
 
-print("[SAB ServerHop v5] Loaded | AutoCheck:", Settings.AutoCheck, "| Min:", Settings.MinValue)
+print("[SAB ServerHop v5] Loaded | AutoCheck:", Settings.AutoCheck, "| Min:", Settings.MinValue) 

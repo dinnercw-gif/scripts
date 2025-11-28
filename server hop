@@ -1,0 +1,291 @@
+-- SAB EZ SERVERHOP v5 — Fully Persistent, Non-Interfering, Auto-Reloads After Hop
+-- Copy & paste this entire script
+
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local SETTINGS_KEY = "SAB_EZ_ServerHop_Config_v5"
+
+-- === PERSISTENCE SETUP ===
+local function getPersistent()
+    if getgenv().setasync and getgenv().getasync then
+        return getgenv().getasync, getgenv().setasync
+    elseif setasync and getasync then
+        return getasync, setasync
+    end
+    return function() return nil end, function() end
+end
+
+local getasync, setasync = getPersistent()
+
+local function loadSettings()
+    local success, raw = pcall(getasync, SETTINGS_KEY)
+    if not success or not raw or raw == "" then
+        return { AutoCheck = false, MinValue = 9000000 }
+    end
+    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
+    if not ok or type(decoded) ~= "table" then
+        return { AutoCheck = false, MinValue = 9000000 }
+    end
+    return { AutoCheck = decoded.AutoCheck == true, MinValue = tonumber(decoded.MinValue) or 9000000 }
+end
+
+local function saveSettings(settings)
+    pcall(function()
+        setasync(SETTINGS_KEY, HttpService:JSONEncode(settings))
+    end)
+end
+
+local Settings = loadSettings()
+
+-- === ANIMAL / PLOT LOGIC ===
+local PlotController, SharedAnimals
+pcall(function()
+    PlotController = require(ReplicatedStorage.Controllers.PlotController)
+    SharedAnimals = require(ReplicatedStorage.Shared.Animals)
+end)
+
+local function GetPlots()
+    if not getgenv()._plots then
+        local ok, val = pcall(getupvalue, PlotController.Start, 2)
+        getgenv()._plots = ok and val or (PlotController.Plots or {})
+    end
+    return getgenv()._plots or {}
+end
+
+local function GetPlot(uid)
+    return uid and GetPlots()[uid] or PlotController:GetMyPlot()
+end
+
+local function GetPlotAnimals(plot)
+    plot = plot or GetPlot()
+    if not plot then return {} end
+    local ok, data = pcall(plot.Channel.Get, plot.Channel, "AnimalList")
+    if ok and data and data.AnimalList then return data.AnimalList end
+    return plot.AnimalList or plot.Animals or {}
+end
+
+local function GetAnimalPrice(index)
+    local ok, price = pcall(SharedAnimals.GetPrice, SharedAnimals, index)
+    return ok and tonumber(price) or 0
+end
+
+-- === SERVER CHECK ===
+local checking = false
+local function checkServerValues(minValue)
+    if checking then return false, 0 end
+    checking = true
+    local found, highest = false, 0
+    local myPlot = GetPlot()
+    local myUID = myPlot and (myPlot.UID or myPlot.id or myPlot.uid)
+
+    pcall(function()
+        for _, plot in pairs(GetPlots()) do
+            local uid = plot.UID or plot.id or plot.uid
+            if uid and uid ~= myUID then
+                for _, animal in pairs(GetPlotAnimals(plot)) do
+                    if type(animal) == "table" and animal ~= "Empty" and animal.Steal == false then
+                        local price = GetAnimalPrice(animal.Index or animal.index)
+                        if price > highest then highest = price end
+                        if price >= minValue then
+                            found = true
+                            break
+                        end
+                    end
+                end
+                if found then break end
+            end
+        end
+    end)
+
+    checking = false
+    return found, highest
+end
+
+-- === SERVER HOP ===
+local hopping = false
+local function serverHop()
+    if hopping then return end
+    hopping = true
+    saveSettings(Settings)
+
+    local placeId = game.PlaceId
+    local servers = {}
+
+    pcall(function()
+        local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100", placeId)
+        local data = HttpService:JSONDecode(game:HttpGet(url))
+        if data and data.data then
+            for _, server in ipairs(data.data) do
+                if server.id ~= game.JobId and server.playing < server.maxPlayers then
+                    table.insert(servers, server.id)
+                end
+            end
+        end
+    end)
+
+    if #servers == 0 then
+        TeleportService:Teleport(placeId, LocalPlayer)
+        return
+    end
+
+    local target = servers[math.random(1, #servers)]
+    print("[SAB] Hopping to server:", target)
+    TeleportService:TeleportToPlaceInstance(placeId, target, LocalPlayer)
+    task.wait(2)
+    hopping = false
+end
+
+-- === AUTO CHECK LOOP ===
+local running = false
+local function startAutoCheck()
+    if running then return end
+    running = true
+    task.spawn(function()
+        while Settings.AutoCheck do
+            local found, highest = checkServerValues(Settings.MinValue)
+            if not found then
+                print("[SAB] No good animal found (highest: "..highest.."). Hopping...")
+                serverHop()
+                task.wait(6)
+            else
+                print("[SAB] Good animal found! Staying here.")
+                task.wait(4)
+            end
+        end
+        running = false
+    end)
+end
+
+-- === CLEAN NON-INTERFERING UI ===
+local function buildUI()
+    if not LocalPlayer or not LocalPlayer:FindFirstChild("PlayerGui") then return end
+    local pg = LocalPlayer.PlayerGui
+    if pg:FindFirstChild("SAB_EZ_ServerHop_UI") then pg.SAB_EZ_ServerHop_UI:Destroy() end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "SAB_EZ_ServerHop_UI"
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 999999
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    gui.Parent = pg
+
+    local frame = Instance.new("Frame", gui)
+    frame.Size = UDim2.new(0, 280, 0, 165)
+    frame.Position = UDim2.new(1, -300, 0, 20)
+    frame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    frame.BackgroundTransparency = 0.05
+    frame.BorderSizePixel = 0
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
+    Instance.new("UIStroke", frame).Color = Color3.fromRGB(70, 70, 90)
+
+    -- Title
+    local title = Instance.new("TextLabel", frame)
+    title.Size = UDim2.new(1, -20, 0, 50)
+    title.Position = UDim2.new(0, 10, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "SAB ServerHop v5"
+    title.TextColor3 = Color3.new(1,1,1)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 19
+    title.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Toggle
+    local toggle = Instance.new("TextButton", frame)
+    toggle.Size = UDim2.new(0.9, 0, 0, 45)
+    toggle.Position = UDim2.new(0.05, 0, 0, 55)
+    toggle.BackgroundColor3 = Settings.AutoCheck and Color3.fromRGB(0, 215, 115) or Color3.fromRGB(60, 60, 75)
+    toggle.Text = ""
+    toggle.AutoButtonColor = false
+    Instance.new("UICorner", toggle).CornerRadius = UDim.new(0, 10)
+    local stroke = Instance.new("UIStroke", toggle)
+    stroke.Color = Settings.AutoCheck and Color3.fromRGB(0, 255, 140) or Color3.fromRGB(90, 90, 110)
+    stroke.Thickness = 2
+
+    local tlabel = Instance.new("TextLabel", toggle)
+    tlabel.Size = UDim2.new(1,0,1,0)
+    tlabel.BackgroundTransparency = 1
+    tlabel.Text = Settings.AutoCheck and "  AUTO CHECK: ON" or "  AUTO CHECK: OFF"
+    tlabel.TextColor3 = Color3.new(1,1,1)
+    tlabel.Font = Enum.Font.GothamBold
+    tlabel.TextSize = 16
+    tlabel.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Input
+    local input = Instance.new("TextBox", frame)
+    input.Size = UDim2.new(0.9, 0, 0, 36)
+    input.Position = UDim2.new(0.05, 0, 0, 128)
+    input.Text = tostring(Settings.MinValue)
+    input.PlaceholderText = "e.g. 9000000"
+    input.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    input.TextColor3 = Color3.new(1,1,1)
+    input.Font = Enum.Font.Gotham
+    input.TextSize = 14
+    Instance.new("UICorner", input).CornerRadius = UDim.new(0, 8)
+
+    -- Toggle Click
+    toggle.MouseButton1Click:Connect(function()
+        Settings.AutoCheck = not Settings.AutoCheck
+        saveSettings(Settings)
+        tlabel.Text = Settings.AutoCheck and "  AUTO CHECK: ON" or "  AUTO CHECK: OFF"
+        toggle.BackgroundColor3 = Settings.AutoCheck and Color3.fromRGB(0, 215, 115) or Color3.fromRGB(60, 60, 75)
+        stroke.Color = Settings.AutoCheck and Color3.fromRGB(0, 255, 140) or Color3.fromRGB(90, 90, 110)
+        if Settings.AutoCheck then startAutoCheck() end
+    end)
+
+    -- Input Save
+    input.FocusLost:Connect(function(enter)
+        if enter then
+            local num = tonumber(input.Text:gsub(",", ""))
+            if num and num > 0 then
+                Settings.MinValue = num
+                saveSettings(Settings)
+                input.Text = tostring(num)
+            else
+                input.Text = tostring(Settings.MinValue)
+            end
+        end
+    end)
+
+    -- Draggable
+    local dragging = false
+    local dragStart, startPos
+    title.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = i.Position
+            startPos = frame.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = i.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+end
+
+-- === AUTO RELOAD ON HOP (CRITICAL) ===
+local SCRIPT_URL = "https://raw.githubusercontent.com/YourUsername/YourRepo/main/SABServerHop.lua"  -- CHANGE THIS TO YOUR RAW GITHUB LINK
+
+if syn and syn.queue_on_teleport then
+    syn.queue_on_teleport("loadstring(game:HttpGet('"..SCRIPT_URL.."'))()")
+end
+
+LocalPlayer.OnTeleport:Connect(function()
+    task.wait(1)
+    loadstring(game:HttpGet(SCRIPT_URL))()
+end)
+
+-- === START ===
+buildUI()
+if Settings.AutoCheck then startAutoCheck() end
+
+print("[SAB ServerHop v5] Loaded | AutoCheck:", Settings.AutoCheck, "| Min:", Settings.MinValue)

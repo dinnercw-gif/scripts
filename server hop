@@ -133,7 +133,7 @@ end
 
 LocalPlayer.OnTeleport:Connect(function()
     task.wait(1)
-    loadstring(game:HttpGet(SCRIPT_URL))()
+    loadstring(game:HttpGet(loadstring(game:HttpGet('raw.githubusercontent.com/dinnercw-gif/scripts/refs/heads/main/server%20hop))()
 end)
 
 -- AUTO CHECK LOOP
